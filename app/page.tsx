@@ -16,6 +16,8 @@ type BlogResult = {
   title: string;
   body: string;
   platform: Platform;
+  images?: string[];
+  productName?: string;
 };
 
 type HistoryItem = {
@@ -48,6 +50,49 @@ const BLOG_MESSAGES = [
   "SEO 키워드를 삽입하고 있습니다...",
   "마무리 작업 중입니다...",
 ];
+
+function ImageCard({ url, index }: { url: string; index: number }) {
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState(false);
+
+  const handleClick = () => {
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  if (error) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="aspect-square rounded-lg bg-zinc-800 border border-zinc-700 flex items-center justify-center text-zinc-600 text-[10px] text-center p-2 hover:border-zinc-500 transition-colors"
+      >
+        이미지 {index + 1}
+        <br />열기 →
+      </a>
+    );
+  }
+
+  return (
+    <button
+      onClick={handleClick}
+      className="relative aspect-square rounded-lg overflow-hidden bg-zinc-800 border border-zinc-700 hover:border-zinc-500 transition-colors group"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={url}
+        alt={`상품 이미지 ${index + 1}`}
+        className="w-full h-full object-cover"
+        onError={() => setError(true)}
+      />
+      <div className={`absolute inset-0 flex items-center justify-center bg-black/60 transition-opacity ${copied ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+        <span className="text-white text-[10px] font-medium">{copied ? "복사됨 ✓" : "URL 복사"}</span>
+      </div>
+    </button>
+  );
+}
 
 function LoadingOverlay({ messages }: { messages: string[] }) {
   const [msgIdx, setMsgIdx] = useState(0);
@@ -572,6 +617,51 @@ export default function HomePage() {
                     <pre className="whitespace-pre-wrap text-sm text-zinc-300 leading-relaxed font-sans">{blogResult.body}</pre>
                   )}
                 </div>
+                {/* 이미지 섹션 */}
+                <div className="px-5 py-4 border-t border-zinc-800">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-xs font-semibold text-zinc-400">상품 이미지</div>
+                    {blogResult.platform === "naver" ? (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-900/40 text-green-400">직접 업로드 필요</span>
+                    ) : (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-900/40 text-orange-400">HTML에 자동 삽입됨</span>
+                    )}
+                  </div>
+
+                  {blogResult.images && blogResult.images.length > 0 ? (
+                    <>
+                      <div className="grid grid-cols-3 gap-2 mb-3">
+                        {blogResult.images.map((url, i) => (
+                          <ImageCard key={i} url={url} index={i} />
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-zinc-600">이미지를 클릭하면 URL이 복사됩니다.</p>
+                    </>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-xs text-zinc-500">이미지를 가져오지 못했습니다. 아래 링크에서 직접 검색하세요.</p>
+                      <div className="flex flex-col gap-1.5">
+                        <a
+                          href={`https://search.shopping.naver.com/search/all?query=${encodeURIComponent(blogResult.productName || blogResult.title)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-green-900/20 border border-green-800/30 text-green-400 text-xs hover:bg-green-900/30 transition-colors"
+                        >
+                          <span>🔍</span> 네이버 쇼핑에서 이미지 검색
+                        </a>
+                        <a
+                          href={`https://www.coupang.com/np/search?q=${encodeURIComponent(blogResult.productName || blogResult.title)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-900/20 border border-blue-800/30 text-blue-400 text-xs hover:bg-blue-900/30 transition-colors"
+                        >
+                          <span>🔍</span> 쿠팡에서 이미지 검색
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <details className="px-5 py-3 border-t border-zinc-800">
                   <summary className="text-xs text-zinc-500 cursor-pointer hover:text-zinc-300">원본 텍스트 (복사용)</summary>
                   <pre className="mt-3 p-4 bg-zinc-800 rounded-lg text-xs text-zinc-400 whitespace-pre-wrap overflow-auto max-h-96">{blogResult.body}</pre>

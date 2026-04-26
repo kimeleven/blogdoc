@@ -513,10 +513,20 @@ export async function POST(req: NextRequest) {
   const blogTitle = titleMatch?.[1]?.trim() || productInfo.title || body.product.name;
   const blogBody = bodyMatch?.[1]?.trim() || text;
 
+  const allImages = [
+    ...captured.galleryImages,
+    ...captured.detailImages,
+    ...(productInfo.image ? [productInfo.image] : []),
+  ]
+    .filter((u, i, a) => u && a.indexOf(u) === i)
+    .slice(0, 6);
+
   return NextResponse.json({
     title: blogTitle,
     body: blogBody,
     platform: body.platform,
+    images: allImages,
+    productName: productInfo.title || body.product.name || "",
     capturedImages: {
       hasScreenshot: !!captured.screenshot,
       galleryCount: captured.galleryImages.length,
