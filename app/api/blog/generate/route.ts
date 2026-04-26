@@ -74,57 +74,43 @@ function extractImagesFromHtml(html: string, ogImage: string): string[] {
   return [...images].slice(0, 8);
 }
 
-// ─── DuckDuckGo 이미지 검색으로 상품 이미지 확보 ────────────────────────────
+// ─── 네이버 이미지 검색 API ──────────────────────────────────────────────────
 async function searchProductImages(productName: string): Promise<string[]> {
   if (!productName) return [];
-  const ua =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+  const clientId = process.env.NAVER_CLIENT_ID;
+  const clientSecret = process.env.NAVER_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    console.error("[Naver] API 키 없음");
+    return [];
+  }
 
   try {
-    const query = encodeURIComponent(productName);
-
-    // 1단계: 검색 페이지에서 vqd 토큰 추출
-    const pageRes = await fetch(
-      `https://duckduckgo.com/?q=${query}&iax=images&ia=images`,
-      { headers: { "User-Agent": ua, "Accept-Language": "ko-KR,ko;q=0.9" } }
-    );
-    const pageHtml = await pageRes.text();
-    const vqdMatch = pageHtml.match(/vqd[=:"']+([0-9-]+)/);
-    if (!vqdMatch) {
-      console.error("[DDG Search] vqd 추출 실패");
-      return [];
-    }
-    const vqd = vqdMatch[1];
-
-    // 2단계: 이미지 JSON 요청
-    const imgRes = await fetch(
-      `https://duckduckgo.com/i.js?q=${query}&vqd=${vqd}&p=1`,
+    const res = await fetch(
+      `https://openapi.naver.com/v1/search/image?query=${encodeURIComponent(productName)}&display=8&sort=sim`,
       {
         headers: {
-          "User-Agent": ua,
-          "Accept-Language": "ko-KR,ko;q=0.9",
-          Referer: "https://duckduckgo.com/",
+          "X-Naver-Client-Id": clientId,
+          "X-Naver-Client-Secret": clientSecret,
         },
       }
     );
-    const data = await imgRes.json() as { results?: { image?: string }[] };
-    const results = data.results || [];
 
-    const images = results
-      .map((r) => r.image || "")
-      .filter(
-        (url) =>
-          url.startsWith("http") &&
-          !url.includes("icon") &&
-          !url.includes("logo") &&
-          !url.includes(".gif")
-      )
+    if (!res.ok) {
+      console.error("[Naver] API 에러:", res.status);
+      return [];
+    }
+
+    const data = await res.json() as { items?: { link?: string }[] };
+    const images = (data.items || [])
+      .map((item) => item.link || "")
+      .filter((url) => url.startsWith("http") && !url.includes(".gif"))
       .slice(0, 6);
 
-    console.log(`[DDG Search] "${productName}" → ${images.length}개 이미지`);
+    console.log(`[Naver Search] "${productName}" → ${images.length}개 이미지`);
     return images;
   } catch (e) {
-    console.error("[DDG Search] 실패:", e instanceof Error ? e.message : e);
+    console.error("[Naver Search] 실패:", e instanceof Error ? e.message : e);
     return [];
   }
 }
