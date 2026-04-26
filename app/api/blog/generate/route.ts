@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import OpenAI from "openai";
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const MODELARK_API_KEY = process.env.MODELARK_API_KEY || process.env.GEMINI_API_KEY;
+
+const openai = new OpenAI({
+  baseURL: "https://api.modelark.com/v1",
+  apiKey: MODELARK_API_KEY,
+});
 
 type BlogRequest = {
   product: {
@@ -129,22 +135,29 @@ ${platformGuide}
 (블로그 본문)`;
 }
 
-async function generateWithGemini(prompt: string): Promise<string> {
-  if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY not set");
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.8, maxOutputTokens: 8192 },
-      }),
-    }
-  );
-  if (!res.ok) throw new Error(`Gemini error: ${await res.text()}`);
+async function generateWithModelArk(prompt: string): Promise<string> {
+  if (!MODELARK_API_KEY) throw new Error("MODELARK_API_KEY or GEMINI_API_KEY not set");
+
+  const res = await fetch("https://api.modelark.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${MODELARK_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: "kimi-k2.5",
+      messages: [
+        { role: "system", content: "당신은 전문적인 블로그 리뷰어입니다. 주어진 상품에 대해 SEO 최적화된 어필리에이트 블로그 글을 작성합니다." },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.8,
+      max_tokens: 8192,
+    }),
+  });
+
+  if (!res.ok) throw new Error(`ModelArk error: ${await res.text()}`);
   const data = await res.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  return data.choices?.[0]?.message?.content || "";
 }
 
 export async function POST(req: NextRequest) {
@@ -161,7 +174,7 @@ export async function POST(req: NextRequest) {
 
   let text = "";
   try {
-    text = await generateWithGemini(prompt);
+    text = await generateWithModelArk(prompt);
   } catch (e) {
     return NextResponse.json(
       { error: `AI 엔진 사용 불가: ${e instanceof Error ? e.message : "unknown"}` },
