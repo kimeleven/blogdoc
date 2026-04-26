@@ -75,6 +75,7 @@ export default function HomePage() {
   const [suggestions, setSuggestions] = useState<ProductSuggestion[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<ProductSuggestion | null>(null);
   const [affiliateLink, setAffiliateLink] = useState("");
+  const [productUrl, setProductUrl] = useState(""); // 일반 상품 링크 (봇 크롤링용)
   const [additionalInfo, setAdditionalInfo] = useState("");
   const [platform, setPlatform] = useState<Platform>("naver");
   const [blogResult, setBlogResult] = useState<BlogResult | null>(null);
@@ -121,6 +122,7 @@ export default function HomePage() {
         body: JSON.stringify({
           product: selectedProduct ?? { name: "", reason: "", category: "", searchKeywords: [] },
           affiliateLink,
+          productUrl,
           affiliateType,
           platform,
           additionalInfo,
@@ -221,8 +223,19 @@ export default function HomePage() {
                 value={affiliateLink}
                 onChange={(e) => setAffiliateLink(e.target.value)}
                 placeholder={affiliateType === "coupang-partners" ? "https://link.coupang.com/..." : "https://search.shopping.naver.com/..."}
-                className="w-full bg-zinc-800 text-white rounded-lg px-4 py-3 border border-zinc-700 focus:outline-none focus:border-blue-500 text-sm mb-4"
+                className="w-full bg-zinc-800 text-white rounded-lg px-4 py-3 border border-zinc-700 focus:outline-none focus:border-blue-500 text-sm mb-2"
               />
+              <p className="text-xs text-zinc-500 mb-4">블로그 본문에 삽입될 어필리에이트 링크입니다.</p>
+
+              <h3 className="text-sm font-bold mb-2">상품명 <span className="text-zinc-500 font-normal">(선택)</span></h3>
+              <input
+                type="text"
+                value={productUrl}
+                onChange={(e) => setProductUrl(e.target.value)}
+                placeholder={affiliateType === "coupang-partners" ? "예: 삼성 55인치 QLED TV" : "예: 라네즈 립슬리핑 마스크"}
+                className="w-full bg-zinc-800 text-white rounded-lg px-4 py-3 border border-zinc-700 focus:outline-none focus:border-blue-500 text-sm mb-2"
+              />
+              <p className="text-xs text-zinc-500 mb-4">AI가 이 상품명으로 검색하여 실제 정보를 분석해 리뷰를 작성합니다.</p>
 
               <h3 className="text-sm font-bold mb-2">블로그 플랫폼</h3>
               <div className="flex gap-2 mb-4">
