@@ -1,3 +1,128 @@
+import type { NextApiRequest, NextApiResponse } from 'next';
+
+// types
+interface ProductInfo {
+  productId: string;
+  name: string;
+  price: string;
+  category: string;
+  description: string;
+  imageUrl: string;
+  affiliateLink: string;
+  productLink?: string;
+}
+
+interface Suggestion {
+  id: string;
+  name: string;
+  description: string;
+  price: string;
+  imageUrl: string;
+  productUrl: string;
+  category: string;
+}
+
+interface SuggestResponse {
+  suggestions?: Suggestion[];
+  error?: string;
+}
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<SuggestResponse>
+) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { platform, affiliateLink, productLink } = req.body;
+
+  if (!platform || !affiliateLink) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    let suggestions: Suggestion[] = [];
+
+    // Extract product ID from affiliate link
+    const productId = extractProductId(affiliateLink, platform);
+
+    if (platform === 'coupang' && productId) {
+      // Coupang specific handling with productLink
+      if (productLink) {
+        // For Coupang with productLink, use the enhanced product info
+        const productInfo = await fetchCoupangProductInfo(
+          productId,
+          productLink,
+          affiliateLink
+        );
+
+        suggestions = [{
+          id: productInfo.productId,
+          name: productInfo.name,
+          description: productInfo.description || `${productInfo.name}에 대한 상세 정보`,
+          price: productInfo.price || '가격 정보 확인 필요',
+          imageUrl: productInfo.imageUrl || '',
+          productUrl: productInfo.affiliateLink,
+          category: productInfo.category || '기타',
+        }];
+      } else {
+        // Fallback: generate suggestions based on product ID only
+        const productInfo = await fetchProductInfoFromLink(affiliateLink, platform);
+
+        suggestions = [{
+          id: productId,
+          name: productInfo.name,
+          description: productInfo.description,
+          price: productInfo.price,
+          imageUrl: productInfo.imageUrl,
+          productUrl: affiliateLink,
+          category: productInfo.category,
+        }];
+      }
+    } else {
+      // Generic handling for other platforms
+      const productInfo = await fetchProductInfoFromLink(affiliateLink, platform);
+
+      suggestions = [{
+        id: productId || 'unknown',
+        name: productInfo.name,
+        description: productInfo.description,
+        price: productInfo.price,
+        imageUrl: productInfo.imageUrl,
+        productUrl: affiliateLink,
+        category: productInfo.category,
+      }];
+    }
+
+    res.status(200).json({ suggestions });
+  } catch (error) {
+    console.error('Error in suggest API:', error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to fetch product suggestions'
+    });
+  }
+}
+
+// Extract product ID from affiliate link
+function extractProductId(link: string, platform: string): string | null {
+  try {
+    if (platform === 'coupang') {
+      // Coupang affiliate links: https://link.coupang.com/a/xxxxx
+      // Try to extract some identifier
+      const match = link.match(/\/a\/(\w+)/);
+      return match ? match[1] : null;
+    } else if (platform === 'naver') {
+      // Naver shopping links
+      const match = link.match(/\/(\d+)/);
+      return match ? match[1] : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // Fetch Coupang product info using Gemini
 async function fetchCoupangProductInfo(
   productId: string,
@@ -85,4 +210,43 @@ async function fetchCoupangProductInfo(
       productLink,
     };
   }
+}
+
+// Fetch product info from affiliate link (fallback method)
+async function fetchProductInfoFromLink(
+  link: string,
+  platform: string
+): Promise<ProductInfo> {
+  // This is a placeholder implementation
+  // In a real implementation, you would parse the link and fetch product info
+  // from the respective platform's API or scrape the product page
+
+  const productId = extractProductId(link, platform) || 'unknown';
+
+  return {
+    productId,
+    name: platform === 'coupang' ? '쿠팡 상품' : '네이버 쇼핑 상품',
+    price: '가격 정보를 가져올 수 없습니다',
+    category: '기타',
+    description: '상품 정보를 가져올 수 없습니다. 직접 입력해주세요.',
+    imageUrl: '',
+    affiliateLink: link,
+  };
+}
+
+// Generate AI suggestions based on product info
+async function generateAISuggestions(
+  productInfo: ProductInfo,
+  platform: string
+): Promise<Suggestion[]> {
+  // For now, return a single suggestion based on the product info
+  return [{
+    id: productInfo.productId,
+    name: productInfo.name,
+    description: productInfo.description,
+    price: productInfo.price,
+    imageUrl: productInfo.imageUrl,
+    productUrl: productInfo.affiliateLink,
+    category: productInfo.category,
+  }];
 }
