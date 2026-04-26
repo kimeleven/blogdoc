@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 type AffiliateType = "naver-shopping" | "coupang-partners";
 type Platform = "tistory" | "naver";
@@ -17,6 +17,20 @@ type BlogResult = {
   body: string;
   platform: Platform;
 };
+
+type HistoryItem = {
+  id: string;
+  title: string;
+  body: string;
+  platform: Platform;
+  affiliateType: AffiliateType;
+  affiliateLink: string;
+  productName: string;
+  createdAt: string;
+};
+
+const HISTORY_KEY = "blogdoc-history";
+const MAX_HISTORY = 50;
 
 const SUGGEST_MESSAGES = [
   "AI가 트렌드를 분석하고 있습니다...",
@@ -69,13 +83,150 @@ function LoadingOverlay({ messages }: { messages: string[] }) {
   );
 }
 
+function HistoryPanel({
+  open,
+  onClose,
+  history,
+  onRestore,
+  onDelete,
+  onClear,
+}: {
+  open: boolean;
+  onClose: () => void;
+  history: HistoryItem[];
+  onRestore: (item: HistoryItem) => void;
+  onDelete: (id: string) => void;
+  onClear: () => void;
+}) {
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const copyItem = (item: HistoryItem) => {
+    navigator.clipboard.writeText(`${item.title}\n\n${item.body}`);
+    setCopiedId(item.id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const formatDate = (iso: string) => {
+    const d = new Date(iso);
+    const MM = String(d.getMonth() + 1).padStart(2, "0");
+    const DD = String(d.getDate()).padStart(2, "0");
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${MM}/${DD} ${hh}:${mm}`;
+  };
+
+  return (
+    <>
+      {/* backdrop */}
+      <div
+        className={`fixed inset-0 bg-black/60 z-40 transition-opacity duration-300 ${open ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+        onClick={onClose}
+      />
+      {/* panel */}
+      <div
+        className={`fixed top-0 right-0 h-full w-full max-w-sm bg-zinc-950 border-l border-zinc-800 z-50 flex flex-col transition-transform duration-300 ease-in-out ${open ? "translate-x-0" : "translate-x-full"}`}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 shrink-0">
+          <div>
+            <div className="font-bold text-sm">히스토리</div>
+            <div className="text-xs text-zinc-500">{history.length}개 저장됨</div>
+          </div>
+          <div className="flex items-center gap-2">
+            {history.length > 0 && (
+              <button
+                onClick={onClear}
+                className="text-xs text-red-400 hover:text-red-300 transition-colors px-2 py-1"
+              >
+                전체 삭제
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="w-7 h-7 flex items-center justify-center rounded-lg bg-zinc-800 hover:bg-zinc-700 transition-colors text-zinc-400"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          {history.length === 0 && (
+            <div className="text-center py-12 text-zinc-600 text-sm">
+              아직 생성된 블로그 글이 없습니다
+            </div>
+          )}
+          {history.map((item) => (
+            <div key={item.id} className="bg-zinc-900 rounded-xl overflow-hidden border border-zinc-800">
+              <div className="p-3">
+                <div className="flex items-start gap-2 mb-1">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-semibold text-white leading-snug line-clamp-2">{item.title}</div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${item.platform === "naver" ? "bg-green-900/50 text-green-400" : "bg-orange-900/50 text-orange-400"}`}>
+                        {item.platform === "naver" ? "네이버" : "티스토리"}
+                      </span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${item.affiliateType === "coupang-partners" ? "bg-blue-900/50 text-blue-400" : "bg-emerald-900/50 text-emerald-400"}`}>
+                        {item.affiliateType === "coupang-partners" ? "쿠팡" : "네이버쇼핑"}
+                      </span>
+                      <span className="text-[10px] text-zinc-600">{formatDate(item.createdAt)}</span>
+                    </div>
+                    {item.productName && (
+                      <div className="text-[10px] text-zinc-500 mt-0.5 truncate">{item.productName}</div>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => onDelete(item.id)}
+                    className="shrink-0 w-5 h-5 flex items-center justify-center text-zinc-700 hover:text-red-400 transition-colors text-xs"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="flex gap-1.5 mt-2">
+                  <button
+                    onClick={() => { onRestore(item); onClose(); }}
+                    className="flex-1 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 text-xs font-medium transition-colors"
+                  >
+                    불러오기
+                  </button>
+                  <button
+                    onClick={() => copyItem(item)}
+                    className="flex-1 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium transition-colors"
+                  >
+                    {copiedId === item.id ? "복사됨 ✓" : "복사"}
+                  </button>
+                  <button
+                    onClick={() => setExpandedId(expandedId === item.id ? null : item.id)}
+                    className="px-2 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs transition-colors"
+                  >
+                    {expandedId === item.id ? "접기" : "미리보기"}
+                  </button>
+                </div>
+              </div>
+
+              {expandedId === item.id && (
+                <div className="px-3 pb-3 border-t border-zinc-800 pt-2">
+                  <pre className="text-[11px] text-zinc-400 whitespace-pre-wrap line-clamp-6 font-sans leading-relaxed">
+                    {item.body}
+                  </pre>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
 export default function HomePage() {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [affiliateType, setAffiliateType] = useState<AffiliateType>("coupang-partners");
   const [suggestions, setSuggestions] = useState<ProductSuggestion[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<ProductSuggestion | null>(null);
   const [affiliateLink, setAffiliateLink] = useState("");
-  const [productUrl, setProductUrl] = useState(""); // 일반 상품 링크 (봇 크롤링용)
+  const [productUrl, setProductUrl] = useState("");
   const [additionalInfo, setAdditionalInfo] = useState("");
   const [platform, setPlatform] = useState<Platform>("naver");
   const [blogResult, setBlogResult] = useState<BlogResult | null>(null);
@@ -84,6 +235,54 @@ export default function HomePage() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(HISTORY_KEY);
+      if (stored) setHistory(JSON.parse(stored));
+    } catch {}
+  }, []);
+
+  const saveToHistory = useCallback((result: BlogResult, link: string, pName: string, affType: AffiliateType) => {
+    const item: HistoryItem = {
+      id: Date.now().toString(),
+      title: result.title,
+      body: result.body,
+      platform: result.platform,
+      affiliateType: affType,
+      affiliateLink: link,
+      productName: pName,
+      createdAt: new Date().toISOString(),
+    };
+    setHistory((prev) => {
+      const next = [item, ...prev].slice(0, MAX_HISTORY);
+      try { localStorage.setItem(HISTORY_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+
+  const deleteHistory = (id: string) => {
+    setHistory((prev) => {
+      const next = prev.filter((h) => h.id !== id);
+      try { localStorage.setItem(HISTORY_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
+  const clearHistory = () => {
+    setHistory([]);
+    try { localStorage.removeItem(HISTORY_KEY); } catch {}
+  };
+
+  const restoreHistory = (item: HistoryItem) => {
+    setBlogResult({ title: item.title, body: item.body, platform: item.platform });
+    setAffiliateLink(item.affiliateLink);
+    setAffiliateType(item.affiliateType);
+    setPlatform(item.platform);
+    setStep(3);
+  };
 
   const fetchSuggestions = async () => {
     setLoading(true);
@@ -131,6 +330,12 @@ export default function HomePage() {
       const data = await res.json();
       if (!res.ok) { setError(data.error || "블로그 생성 실패"); return; }
       setBlogResult(data);
+      saveToHistory(
+        data,
+        affiliateLink,
+        productUrl || selectedProduct?.name || "",
+        affiliateType
+      );
     } catch {
       setError("네트워크 오류가 발생했습니다.");
     } finally {
@@ -153,9 +358,26 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-zinc-950 text-white p-4">
       <div className="max-w-4xl mx-auto">
-        <div className="mb-6 pt-2">
-          <h1 className="text-2xl font-bold">BlogDoc</h1>
-          <p className="text-zinc-400 text-sm mt-0.5">어필리에이트 상품 링크 → 블로그 자동 생성</p>
+        <div className="mb-6 pt-2 flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">BlogDoc</h1>
+            <p className="text-zinc-400 text-sm mt-0.5">어필리에이트 상품 링크 → 블로그 자동 생성</p>
+          </div>
+          <button
+            onClick={() => setHistoryOpen(true)}
+            className="relative flex items-center gap-1.5 px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition-colors text-sm text-zinc-300"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+            히스토리
+            {history.length > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-blue-500 text-[10px] font-bold text-white px-1">
+                {history.length}
+              </span>
+            )}
+          </button>
         </div>
 
         {/* Step indicator */}
@@ -174,7 +396,7 @@ export default function HomePage() {
           ))}
         </div>
 
-        {/* Step 1: 플랫폼 선택 */}
+        {/* Step 1 */}
         {step === 1 && (
           <div className="space-y-4">
             <div className="bg-zinc-900 rounded-xl p-5">
@@ -205,10 +427,9 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Step 2: 링크 입력 (메인) + AI 추천 참고 */}
+        {/* Step 2 */}
         {step === 2 && (
           <div className="space-y-4">
-            {/* 링크 입력 — 핵심 */}
             <div className="bg-zinc-900 rounded-xl p-5">
               <div className="flex items-center justify-between mb-1">
                 <h2 className="text-lg font-bold">2. 어필리에이트 링크 입력</h2>
@@ -319,7 +540,7 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Step 3: 결과 */}
+        {/* Step 3 */}
         {step === 3 && (
           <div className="space-y-4">
             {loading && <LoadingOverlay messages={BLOG_MESSAGES} />}
@@ -368,6 +589,15 @@ export default function HomePage() {
           <div className="text-sm px-4 py-2.5 rounded-lg mt-4 bg-red-900/40 text-red-400">{error}</div>
         )}
       </div>
+
+      <HistoryPanel
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        history={history}
+        onRestore={restoreHistory}
+        onDelete={deleteHistory}
+        onClear={clearHistory}
+      />
     </div>
   );
 }
