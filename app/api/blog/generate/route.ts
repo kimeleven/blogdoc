@@ -33,97 +33,98 @@ type CaptureResult = {
 };
 
 // ─── HTML에서 이미지 URL 추출 (정적 파싱) ────────────────────────────────────
+const PRODUCT_CDNS = [
+  "coupangcdn.com", "pstatic.net", "naver.com", "samsung.com",
+  "lge.com", "kakaocdn.net", "11st.co.kr", "gmarket.co.kr",
+  "auction.co.kr", "ssgcdn.com", "lotteimall.com",
+];
+
+function isProductImageUrl(url: string): boolean {
+  if (!url.startsWith("http")) return false;
+  if (url.includes("icon") || url.includes("logo") || url.includes("button") || url.includes("blank")) return false;
+  return PRODUCT_CDNS.some((cdn) => url.includes(cdn));
+}
+
 function extractImagesFromHtml(html: string, ogImage: string): string[] {
   const images = new Set<string>();
-  if (ogImage) images.add(ogImage);
-
-  const isUsable = (url: string) =>
-    url.startsWith("http") &&
-    /\.(jpg|jpeg|png|webp)/i.test(url) &&
-    !url.includes("icon") &&
-    !url.includes("logo") &&
-    !url.includes("button") &&
-    !url.includes("spinner") &&
-    !url.includes("blank");
-
-  // JSON-LD "image" 필드
-  for (const block of (html.match(/"image"\s*:\s*(\[[\s\S]*?\]|"[^"]*")/g) || [])) {
-    for (const u of block.match(/https?:\/\/[^\s"']+/g) || []) {
-      if (isUsable(u)) images.add(u);
-    }
-  }
+  if (ogImage && isProductImageUrl(ogImage)) images.add(ogImage);
 
   // 쿠팡 imageUrl
   for (const m of html.matchAll(/"imageUrl"\s*:\s*"(https?:\/\/[^"]+)"/g)) {
-    if (isUsable(m[1])) images.add(m[1]);
+    if (isProductImageUrl(m[1])) images.add(m[1]);
   }
 
-  // 네이버 representImage
-  for (const m of html.matchAll(/"representImage"\s*:\s*"(https?:\/\/[^"]+)"/g)) {
-    if (isUsable(m[1])) images.add(m[1]);
+  // 네이버 representImage / thumbnailUrl
+  for (const m of html.matchAll(/"(?:representImage|thumbnailUrl)"\s*:\s*"(https?:\/\/[^"]+)"/g)) {
+    if (isProductImageUrl(m[1])) images.add(m[1]);
+  }
+
+  // JSON-LD "image"
+  for (const block of (html.match(/"image"\s*:\s*(\[[\s\S]*?\]|"[^"]*")/g) || [])) {
+    for (const u of block.match(/https?:\/\/[^\s"']+/g) || []) {
+      if (isProductImageUrl(u)) images.add(u);
+    }
   }
 
   // lazy-load data-src
   for (const m of html.matchAll(/data-src="(https?:\/\/[^"]+)"/gi)) {
-    if (isUsable(m[1])) images.add(m[1]);
-  }
-
-  // img src 직접 파싱 (og:image 외 추가분)
-  for (const m of html.matchAll(/<img[^>]+src="(https?:\/\/[^"]+)"/gi)) {
-    if (isUsable(m[1])) images.add(m[1]);
+    if (isProductImageUrl(m[1])) images.add(m[1]);
   }
 
   return [...images].slice(0, 8);
 }
 
-// ─── 이미지 없을 때: 네이버 쇼핑 검색으로 이미지 확보 ─────────────────────────
+// ─── DuckDuckGo 이미지 검색으로 상품 이미지 확보 ────────────────────────────
 async function searchProductImages(productName: string): Promise<string[]> {
   if (!productName) return [];
+  const ua =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
   try {
     const query = encodeURIComponent(productName);
-    const res = await fetch(
-      `https://search.shopping.naver.com/search/all?query=${query}&sort=rel`,
+
+    // 1단계: 검색 페이지에서 vqd 토큰 추출
+    const pageRes = await fetch(
+      `https://duckduckgo.com/?q=${query}&iax=images&ia=images`,
+      { headers: { "User-Agent": ua, "Accept-Language": "ko-KR,ko;q=0.9" } }
+    );
+    const pageHtml = await pageRes.text();
+    const vqdMatch = pageHtml.match(/vqd[=:"']+([0-9-]+)/);
+    if (!vqdMatch) {
+      console.error("[DDG Search] vqd 추출 실패");
+      return [];
+    }
+    const vqd = vqdMatch[1];
+
+    // 2단계: 이미지 JSON 요청
+    const imgRes = await fetch(
+      `https://duckduckgo.com/i.js?q=${query}&vqd=${vqd}&p=1`,
       {
         headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          Accept: "text/html,application/xhtml+xml",
+          "User-Agent": ua,
           "Accept-Language": "ko-KR,ko;q=0.9",
-          Referer: "https://shopping.naver.com/",
+          Referer: "https://duckduckgo.com/",
         },
       }
     );
-    const html = await res.text();
+    const data = await imgRes.json() as { results?: { image?: string }[] };
+    const results = data.results || [];
 
-    const images: string[] = [];
+    const images = results
+      .map((r) => r.image || "")
+      .filter(
+        (url) =>
+          url.startsWith("http") &&
+          !url.includes("icon") &&
+          !url.includes("logo") &&
+          !url.includes(".gif")
+      )
+      .slice(0, 6);
 
-    // __NEXT_DATA__ 안의 상품 이미지
-    const nextDataMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-    if (nextDataMatch) {
-      try {
-        const data = JSON.parse(nextDataMatch[1]);
-        const list =
-          data?.props?.pageProps?.initialState?.products?.list ||
-          data?.props?.pageProps?.initialState?.shoppingResult?.productList ||
-          [];
-        for (const p of list.slice(0, 6)) {
-          const img = p?.image || p?.imageUrl || p?.representImage;
-          if (img && img.startsWith("http")) images.push(img);
-        }
-      } catch {}
-    }
-
-    // 폴백: JSON 패턴으로 파싱
-    if (images.length === 0) {
-      for (const m of html.matchAll(/"(image|imageUrl|img)"\s*:\s*"(https?:\/\/[^"]+\.(jpg|jpeg|png|webp)[^"]*)"/gi)) {
-        if (images.length >= 5) break;
-        images.push(m[2]);
-      }
-    }
-
-    return images.slice(0, 5);
+    console.log(`[DDG Search] "${productName}" → ${images.length}개 이미지`);
+    return images;
   } catch (e) {
-    console.error("[ImageSearch] 실패:", e instanceof Error ? e.message : e);
+    console.error("[DDG Search] 실패:", e instanceof Error ? e.message : e);
     return [];
   }
 }
@@ -166,18 +167,22 @@ async function captureWithPlaywright(url: string): Promise<CaptureResult> {
     } catch {}
 
     const { galleryImages, detailImages } = await page.evaluate(() => {
+      // ⚠️ page.evaluate 브라우저 컨텍스트 — Node.js 변수 참조 불가, 내부 정의 필수
+      const CDNS = [
+        "coupangcdn.com", "pstatic.net", "naver.com", "samsung.com",
+        "lge.com", "kakaocdn.net", "11st.co.kr", "gmarket.co.kr",
+        "auction.co.kr", "ssgcdn.com", "lotteimall.com",
+      ];
+      const isProductImg = (src: string) =>
+        src.startsWith("http") &&
+        CDNS.some((cdn) => src.includes(cdn)) &&
+        !src.includes("icon") &&
+        !src.includes("logo");
+
       const isValid = (el: Element) => {
         const img = el as HTMLImageElement;
         const src = img.src || (img as HTMLElement).dataset?.src || "";
-        return (
-          src.startsWith("http") &&
-          img.naturalWidth > 150 &&
-          img.naturalHeight > 150 &&
-          !src.includes("icon") &&
-          !src.includes("logo") &&
-          !src.includes("button") &&
-          !src.includes("blank")
-        );
+        return img.naturalWidth > 100 && img.naturalHeight > 100 && isProductImg(src);
       };
       const getSrc = (el: Element) => {
         const img = el as HTMLImageElement;
@@ -185,14 +190,20 @@ async function captureWithPlaywright(url: string): Promise<CaptureResult> {
       };
 
       const gallerySelectors = [
+        // 쿠팡
         ".prod-image__item img",
+        ".prod-image__items img",
+        '[class*="prod-img"] img',
+        // 네이버
         ".product-image img",
+        '[class*="ProductImage"] img',
         '[class*="thumbnail"] img',
         '[class*="gallery"] img',
-        '[class*="ProductImage"] img',
+        // 공통
         ".imgBox img",
         ".goodsPhoto img",
         '[class*="mainImage"] img',
+        '[class*="main-img"] img',
       ];
       const gallerySet = new Set<string>();
       for (const sel of gallerySelectors) {
@@ -205,6 +216,7 @@ async function captureWithPlaywright(url: string): Promise<CaptureResult> {
         '[class*="ItemDetail"] img',
         '[class*="productDetail"] img',
         '[class*="DetailImage"] img',
+        '[class*="detail-img"] img',
       ];
       const detailSet = new Set<string>();
       for (const sel of detailSelectors) {
@@ -255,13 +267,12 @@ async function captureProductImages(
     }
   }
 
-  // 이미지가 없거나 너무 적으면 네이버 쇼핑 검색으로 보충
-  const totalImages = galleryImages.length + detailImages.length;
-  if (totalImages < 2 && productName) {
-    console.log("[ImageSearch] 이미지 부족, 네이버 쇼핑 검색 실행:", productName);
+  // 이미지 URL이 부족하면 Bing 검색으로 보충 (스크린샷만 있는 경우도 포함)
+  const totalUrlImages = galleryImages.length + detailImages.length;
+  if (totalUrlImages < 3 && productName) {
+    console.log("[Bing Search] 이미지 부족, 검색 실행:", productName);
     const searched = await searchProductImages(productName);
     if (searched.length > 0) {
-      // 기존 이미지와 합치되 중복 제거
       const existing = new Set([...galleryImages, ...detailImages]);
       const extra = searched.filter((s) => !existing.has(s));
       galleryImages = [...galleryImages, ...extra].slice(0, 5);
@@ -475,7 +486,10 @@ export async function POST(req: NextRequest) {
   }
 
   // 2) 이미지 캡처 (로컬: Playwright, Vercel: HTML 파싱, 없으면 검색)
-  const productName = productInfo.title || body.product.name || body.productUrl || "";
+  // body.product.name 우선 — productInfo.title은 403 시 "Access Denied" 될 수 있음
+  const ERROR_TITLES = ["access denied", "403", "404", "error", "forbidden", "not found"];
+  const isBadTitle = ERROR_TITLES.some((e) => (productInfo.title || "").toLowerCase().includes(e));
+  const productName = body.product.name || body.productUrl || (isBadTitle ? "" : productInfo.title) || "";
   const captured = await captureProductImages(
     body.affiliateLink,
     productInfo.rawHtml || "",
