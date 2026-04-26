@@ -32,38 +32,100 @@ type CaptureResult = {
   detailImages: string[];
 };
 
-// ─── Vercel용: HTML에서 이미지 URL 추출 ──────────────────────────────────────
-function extractImagesFromHtml(html: string, ogImage: string): CaptureResult {
+// ─── HTML에서 이미지 URL 추출 (정적 파싱) ────────────────────────────────────
+function extractImagesFromHtml(html: string, ogImage: string): string[] {
   const images = new Set<string>();
   if (ogImage) images.add(ogImage);
 
+  const isUsable = (url: string) =>
+    url.startsWith("http") &&
+    /\.(jpg|jpeg|png|webp)/i.test(url) &&
+    !url.includes("icon") &&
+    !url.includes("logo") &&
+    !url.includes("button") &&
+    !url.includes("spinner") &&
+    !url.includes("blank");
+
   // JSON-LD "image" 필드
-  const jsonLd = html.match(/"image"\s*:\s*(\[[\s\S]*?\]|"[^"]*")/g) || [];
-  for (const block of jsonLd) {
-    const urls = block.match(/https?:\/\/[^"]+/g) || [];
-    urls.forEach((u) => images.add(u));
+  for (const block of (html.match(/"image"\s*:\s*(\[[\s\S]*?\]|"[^"]*")/g) || [])) {
+    for (const u of block.match(/https?:\/\/[^\s"']+/g) || []) {
+      if (isUsable(u)) images.add(u);
+    }
   }
 
-  // 쿠팡 상품 이미지 JSON
-  const coupangImgs = html.matchAll(/"imageUrl"\s*:\s*"(https?:\/\/[^"]+)"/g);
-  for (const m of coupangImgs) images.add(m[1]);
-
-  // 네이버 상품 이미지
-  const naverImgs = html.matchAll(/"representImage"\s*:\s*"(https?:\/\/[^"]+)"/g);
-  for (const m of naverImgs) images.add(m[1]);
-
-  // img 태그 data-src (lazy loading)
-  const dataSrcs = html.matchAll(/data-src="(https?:\/\/[^"]+\.(jpg|jpeg|png|webp)[^"]*)"/gi);
-  for (const m of dataSrcs) {
-    if (!m[1].includes("icon") && !m[1].includes("logo")) images.add(m[1]);
+  // 쿠팡 imageUrl
+  for (const m of html.matchAll(/"imageUrl"\s*:\s*"(https?:\/\/[^"]+)"/g)) {
+    if (isUsable(m[1])) images.add(m[1]);
   }
 
-  const all = [...images].filter(Boolean);
-  return {
-    screenshot: null,
-    galleryImages: all.slice(0, 5),
-    detailImages: all.slice(5, 8),
-  };
+  // 네이버 representImage
+  for (const m of html.matchAll(/"representImage"\s*:\s*"(https?:\/\/[^"]+)"/g)) {
+    if (isUsable(m[1])) images.add(m[1]);
+  }
+
+  // lazy-load data-src
+  for (const m of html.matchAll(/data-src="(https?:\/\/[^"]+)"/gi)) {
+    if (isUsable(m[1])) images.add(m[1]);
+  }
+
+  // img src 직접 파싱 (og:image 외 추가분)
+  for (const m of html.matchAll(/<img[^>]+src="(https?:\/\/[^"]+)"/gi)) {
+    if (isUsable(m[1])) images.add(m[1]);
+  }
+
+  return [...images].slice(0, 8);
+}
+
+// ─── 이미지 없을 때: 네이버 쇼핑 검색으로 이미지 확보 ─────────────────────────
+async function searchProductImages(productName: string): Promise<string[]> {
+  if (!productName) return [];
+  try {
+    const query = encodeURIComponent(productName);
+    const res = await fetch(
+      `https://search.shopping.naver.com/search/all?query=${query}&sort=rel`,
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          Accept: "text/html,application/xhtml+xml",
+          "Accept-Language": "ko-KR,ko;q=0.9",
+          Referer: "https://shopping.naver.com/",
+        },
+      }
+    );
+    const html = await res.text();
+
+    const images: string[] = [];
+
+    // __NEXT_DATA__ 안의 상품 이미지
+    const nextDataMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (nextDataMatch) {
+      try {
+        const data = JSON.parse(nextDataMatch[1]);
+        const list =
+          data?.props?.pageProps?.initialState?.products?.list ||
+          data?.props?.pageProps?.initialState?.shoppingResult?.productList ||
+          [];
+        for (const p of list.slice(0, 6)) {
+          const img = p?.image || p?.imageUrl || p?.representImage;
+          if (img && img.startsWith("http")) images.push(img);
+        }
+      } catch {}
+    }
+
+    // 폴백: JSON 패턴으로 파싱
+    if (images.length === 0) {
+      for (const m of html.matchAll(/"(image|imageUrl|img)"\s*:\s*"(https?:\/\/[^"]+\.(jpg|jpeg|png|webp)[^"]*)"/gi)) {
+        if (images.length >= 5) break;
+        images.push(m[2]);
+      }
+    }
+
+    return images.slice(0, 5);
+  } catch (e) {
+    console.error("[ImageSearch] 실패:", e instanceof Error ? e.message : e);
+    return [];
+  }
 }
 
 // ─── 로컬용: Playwright로 스크린샷 + 이미지 추출 ─────────────────────────────
@@ -163,25 +225,50 @@ async function captureWithPlaywright(url: string): Promise<CaptureResult> {
   }
 }
 
-// ─── 환경에 따라 자동 선택 ──────────────────────────────────────────────────
+// ─── 환경에 따라 자동 선택 + 이미지 없으면 검색 폴백 ────────────────────────
 async function captureProductImages(
   url: string,
   html: string,
-  ogImage: string
+  ogImage: string,
+  productName: string
 ): Promise<CaptureResult> {
   if (!url) return { screenshot: null, galleryImages: [], detailImages: [] };
 
+  let galleryImages: string[] = [];
+  let detailImages: string[] = [];
+  let screenshot: string | null = null;
+
   if (process.env.VERCEL) {
-    // Vercel: 브라우저 없이 HTML 파싱으로 이미지 추출
-    return extractImagesFromHtml(html, ogImage);
+    // Vercel: HTML 파싱
+    const all = extractImagesFromHtml(html, ogImage);
+    galleryImages = all.slice(0, 5);
+    detailImages = all.slice(5, 8);
   } else {
-    // 로컬: Playwright 전체 캡처, 실패 시 HTML 파싱으로 폴백
+    // 로컬: Playwright 시도, 실패 시 HTML 파싱
     const pw = await captureWithPlaywright(url);
-    if (pw.galleryImages.length === 0 && !pw.screenshot) {
-      return extractImagesFromHtml(html, ogImage);
+    if (pw.galleryImages.length > 0 || pw.screenshot) {
+      ({ galleryImages, detailImages, screenshot } = pw);
+    } else {
+      const all = extractImagesFromHtml(html, ogImage);
+      galleryImages = all.slice(0, 5);
+      detailImages = all.slice(5, 8);
     }
-    return pw;
   }
+
+  // 이미지가 없거나 너무 적으면 네이버 쇼핑 검색으로 보충
+  const totalImages = galleryImages.length + detailImages.length;
+  if (totalImages < 2 && productName) {
+    console.log("[ImageSearch] 이미지 부족, 네이버 쇼핑 검색 실행:", productName);
+    const searched = await searchProductImages(productName);
+    if (searched.length > 0) {
+      // 기존 이미지와 합치되 중복 제거
+      const existing = new Set([...galleryImages, ...detailImages]);
+      const extra = searched.filter((s) => !existing.has(s));
+      galleryImages = [...galleryImages, ...extra].slice(0, 5);
+    }
+  }
+
+  return { screenshot, galleryImages, detailImages };
 }
 
 // ─── 상품 정보 추출 ───────────────────────────────────────────────────────────
@@ -387,11 +474,13 @@ export async function POST(req: NextRequest) {
     productInfo = await fetchProductInfo(body.affiliateLink);
   }
 
-  // 2) 이미지 캡처 (로컬: Playwright, Vercel: HTML 파싱)
+  // 2) 이미지 캡처 (로컬: Playwright, Vercel: HTML 파싱, 없으면 검색)
+  const productName = productInfo.title || body.product.name || body.productUrl || "";
   const captured = await captureProductImages(
     body.affiliateLink,
     productInfo.rawHtml || "",
-    productInfo.image
+    productInfo.image,
+    productName
   );
 
   // 3) Gemini로 블로그 생성
