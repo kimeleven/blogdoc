@@ -471,11 +471,22 @@ export async function POST(req: NextRequest) {
     productInfo = await fetchProductInfo(body.affiliateLink);
   }
 
-  // 2) 이미지 캡처 (로컬: Playwright, Vercel: HTML 파싱, 없으면 검색)
-  // body.product.name 우선 — productInfo.title은 403 시 "Access Denied" 될 수 있음
+  // 2) 크롤링 실패(403 등) 시 productInfo를 body.product 기반으로 교체
   const ERROR_TITLES = ["access denied", "403", "404", "error", "forbidden", "not found"];
   const isBadTitle = ERROR_TITLES.some((e) => (productInfo.title || "").toLowerCase().includes(e));
-  const productName = body.product.name || body.productUrl || (isBadTitle ? "" : productInfo.title) || "";
+  if (isBadTitle || !productInfo.title) {
+    productInfo = {
+      title: body.product.name,
+      description: body.product.reason,
+      price: "",
+      image: "",
+      url: body.affiliateLink,
+      rawHtml: productInfo.rawHtml || "",
+    };
+  }
+
+  // 3) 이미지 캡처 (로컬: Playwright, Vercel: HTML 파싱, 없으면 네이버 검색)
+  const productName = body.product.name || body.productUrl || productInfo.title || "";
   const captured = await captureProductImages(
     body.affiliateLink,
     productInfo.rawHtml || "",
@@ -483,7 +494,7 @@ export async function POST(req: NextRequest) {
     productName
   );
 
-  // 3) Gemini로 블로그 생성
+  // 4) Gemini로 블로그 생성
   const prompt = buildBlogPrompt(body, productInfo, captured);
 
   let text = "";
